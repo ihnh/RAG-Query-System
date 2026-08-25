@@ -1,5 +1,5 @@
 """
-Exercise 4: Retrieval-Augmented Generation (RAG) with Amazon Bedrock
+Retrieval-Augmented Generation (RAG) with Amazon Bedrock
 --------------------------------------------------------------------
 Prerequisites:
     pip install boto3 numpy chromadb
