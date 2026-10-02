@@ -7,17 +7,16 @@ Prerequisites:
 AWS credentials must be configured:
     aws configure
 
+Objectives:
     - Implement a basic RAG system using Amazon Bedrock
     - Select appropriate Bedrock models for embedding and text generation
     - Build a document indexing system using ChromaDB vector store
     - Develop a retrieval mechanism based on semantic similarity
     - Integrate retrieved context into prompts for improved text generation
-    - Compare RAG vs Non-RAG responses to evaluate effectiveness
-    
+    - Compare RAG vs. non-RAG responses to evaluate effectiveness
 """
 
 import json
-import numpy as np
 import boto3
 import chromadb
 
@@ -25,23 +24,27 @@ import chromadb
 # PART 2: Initialize Bedrock Client & Models
 # ──────────────────────────────────────────────
 
-# NOTE: Must use 'bedrock-runtime' for model inference
-# This creates a connection to AWS Bedrock
-
+# NOTE: Must use 'bedrock-runtime' for model inference.
+# This creates a connection to Amazon Bedrock.
 bedrock = boto3.client(
     service_name="bedrock-runtime",
     region_name="us-east-1"
 )
 
-# Nova Embeddings converts texts to vectors, Nova Pro generates human readaable answers
-
-EMBEDDING_MODEL      = "amazon.nova-2-multimodal-embeddings-v1:0"
+# Nova Embeddings converts text to vectors; Nova Pro generates human-readable answers.
+EMBEDDING_MODEL       = "amazon.nova-2-multimodal-embeddings-v1:0"
 TEXT_GENERATION_MODEL = "amazon.nova-pro-v1:0"
 
-#Until line 44 - Nova specific API format - Single Embediing : embed one piece of text at a time
-#Generic Index - Indexing docs, embeddingDimension 1024 : text becoms a list of 1024 numbers, truncationMode : text too long, cut from end
 
 def get_bedrock_embedding(text: str) -> list[float]:
+    """
+    Generate an embedding for one piece of text using Nova Embeddings.
+
+    - SINGLE_EMBEDDING: embed one piece of text at a time
+    - GENERIC_INDEX: embedding purpose suited to indexing documents
+    - embeddingDimension 1024: the text becomes a list of 1,024 numbers
+    - truncationMode END: if the text is too long, cut it from the end
+    """
     body = json.dumps({
         "taskType": "SINGLE_EMBEDDING",
         "singleEmbeddingParams": {
@@ -61,6 +64,9 @@ def get_bedrock_embedding(text: str) -> list[float]:
 
 
 def generate_text(prompt: str) -> str:
+    """
+    Generate a text response using Amazon Nova Pro.
+    """
     body = json.dumps({
         "messages": [
             {"role": "user", "content": [{"text": prompt}]}
@@ -79,16 +85,21 @@ def generate_text(prompt: str) -> str:
 # ──────────────────────────────────────────────
 # PART 3: Document Indexing with ChromaDB
 # ──────────────────────────────────────────────
-#ChromaDB runs in memory, no server, no database file, reset every time you run the script
+
 print("=" * 60)
 print("PART 3: Setting up ChromaDB Vector Store")
 print("=" * 60)
 
-# Initialize ChromaDB (runs in-memory, no server needed)
+# ChromaDB runs in memory: no server and no database file.
+# The collection resets every time the script runs.
 chroma_client = chromadb.Client()
 
-# Create a collection (we'll add embeddings manually)
-collection = chroma_client.create_collection(name="bedrock_docs")
+# Use cosine similarity so retrieval matches the similarity measure
+# used in the embeddings exercise (ChromaDB defaults to L2 distance).
+collection = chroma_client.create_collection(
+    name="bedrock_docs",
+    metadata={"hnsw:space": "cosine"}
+)
 
 # Sample knowledge base documents
 sample_docs = [
@@ -104,7 +115,10 @@ sample_docs = [
 
 def add_documents(docs: list[str]):
     """
-    Generate embeddings for each document and store them in ChromaDB.
+    Indexing step. For each document:
+      1. Call Bedrock to get its embedding vector
+      2. Store both the original text and the vector in ChromaDB
+      3. Give each document a unique ID
     """
     print(f"Indexing {len(docs)} documents...")
     embeddings = [get_bedrock_embedding(doc) for doc in docs]
@@ -114,7 +128,7 @@ def add_documents(docs: list[str]):
         ids=[f"doc_{i}" for i in range(len(docs))]
     )
     print("Documents indexed successfully!\n")
-# Indexing step >> For each document: Call Bedrock to get its embedding vector, Store both the original text AND the vector in ChromaDB, Give each document a unique ID
+
 
 add_documents(sample_docs)
 
@@ -127,37 +141,35 @@ print("=" * 60)
 print("PART 4: RAG System")
 print("=" * 60)
 
-#top_k=2 means retrieve the 2 most relevant documents for any query
+
 def rag_generate(query: str, top_k: int = 2) -> str:
     """
     Full RAG pipeline:
       1. Embed the query
-      2. Retrieve top_k most similar documents from ChromaDB
-      3. Build a prompt with retrieved context
-      4. Generate a response using Claude
+      2. Retrieve the top_k most similar documents from ChromaDB
+      3. Build a prompt with the retrieved context
+      4. Generate a response using Amazon Nova Pro
     """
     # Step 1: Embed the query
     query_embedding = get_bedrock_embedding(query)
 
-    # Step 2: Retrieve relevant documents
+    # Step 2: Retrieve relevant documents.
+    # ChromaDB finds the top_k documents whose vectors are closest to the query vector.
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k
     )
     retrieved_docs = results["documents"][0]
-    # The query gets embedded too, then ChromaDB finds the 2 documents whose vectors are mathematically closest to the query vector.
-    # Step 3: Build prompt with context
+
+    # Step 3: Stitch the retrieved documents into the prompt as context.
+    # This is what makes it RAG: the model sees your documents before answering.
     context = "\n".join([f"- {doc}" for doc in retrieved_docs])
     prompt = f"""You are a helpful assistant. Use the context below to answer the question accurately.
-    # stitch the retrieved documents into the prompt as context. This is what makes it RAG — the model sees your documents before answering
-    
-
 
 Context:
 {context}
 
 Question: {query}
-   
 
 Answer based on the context provided:"""
 
@@ -167,25 +179,25 @@ Answer based on the context provided:"""
 
 def generate_without_rag(query: str) -> str:
     """
-    Generate a response using NovaPro WITHOUT any retrieved context.
+    Generate a response using Amazon Nova Pro WITHOUT any retrieved context.
     Used for comparison against RAG responses.
     """
     prompt = f"Answer this question as best you can: {query}"
     return generate_text(prompt)
 
 
-# Test single query first
+# Test a single query first
 test_query = "How does Amazon Bedrock relate to RAG systems?"
 print(f"Query: {test_query}")
 print(f"Response: {rag_generate(test_query)}\n")
 
 
 # ──────────────────────────────────────────────
-# PART 5: RAG vs Non-RAG Comparison
+# PART 5: RAG vs. Non-RAG Comparison
 # ──────────────────────────────────────────────
 
 print("=" * 60)
-print("PART 5: RAG vs Non-RAG Comparison")
+print("PART 5: RAG vs. Non-RAG Comparison")
 print("=" * 60)
 
 test_queries = [
@@ -200,10 +212,10 @@ for query in test_queries:
     print(f"\n  Non-RAG Response:\n  {generate_without_rag(query)}")
     print("\n" + "=" * 60)
 
-print("\nExercise 4 complete! ✓")
+print("\nRAG vs. non-RAG comparison complete.")
 print("""
 Key takeaway:
-  RAG responses are grounded in YOUR documents — specific, controlled.
-  Non-RAG responses come purely from the model's training data — broader
+  RAG responses are grounded in your documents: specific and controlled.
+  Non-RAG responses come purely from the model's training data: broader,
   but potentially less accurate for domain-specific questions.
 """)
